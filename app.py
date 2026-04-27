@@ -448,263 +448,265 @@ def add_indicators(df):
     return df
 
 
-def optimize_entry_execution(price, suggested_entry, action, breakout_level, ma20, atr14):
+def optimize_entry_execution(action, price, suggested_entry, breakout_level, ma20, atr14):
     if price is None or pd.isna(price):
         return {
-            "entry_type": "N/A",
-            "entry_zone": "-",
+            "entry_type": "Wait",
+            "entry_zone": None,
             "fill_probability_today": "Low",
             "execution_note": "Price unavailable.",
             "pt": None,
             "sl": None,
         }
 
-    atr14 = atr14 if atr14 is not None and not pd.isna(atr14) else max(price * 0.02, 0.01)
-    suggested_entry = suggested_entry if suggested_entry is not None and not pd.isna(suggested_entry) else price
+    if atr14 is None or pd.isna(atr14) or atr14 <= 0:
+        atr14 = max(price * 0.02, 1.0)
 
-    if action in ["Breakout Watch", "Breakout Confirmed"]:
-        trigger = breakout_level if breakout_level and not pd.isna(breakout_level) else suggested_entry
-        zone_low = trigger
-        zone_high = trigger + atr14 * 0.25
-        if price < trigger * 0.99:
-            fill_prob = "Medium"
-            note = "Below breakout trigger. Use buy stop or stop-limit above breakout level."
-        elif price <= zone_high:
-            fill_prob = "High"
-            note = "Near trigger zone. Executable breakout entry today with disciplined stop-limit."
-        else:
-            fill_prob = "Low"
-            note = "Already extended above breakout zone. Do not chase."
-        pt = zone_high + atr14 * 2.2
-        sl = zone_low - atr14 * 1.0
+    pt = round(price + 2.2 * atr14, 2)
+    sl = round(price - 1.4 * atr14, 2)
+
+    if action == "Breakout Confirmed":
+        trigger = breakout_level if breakout_level is not None and not pd.isna(breakout_level) else price
+        entry_low = round(trigger * 1.001, 2)
+        entry_high = round(trigger * 1.008, 2)
         return {
             "entry_type": "Buy Stop / Stop-Limit",
-            "entry_zone": f"{format_num(zone_low, 2)} - {format_num(zone_high, 2)}",
-            "fill_probability_today": fill_prob,
-            "execution_note": note,
-            "pt": safe_round(pt),
-            "sl": safe_round(sl),
+            "entry_zone": f"{entry_low} to {entry_high}",
+            "fill_probability_today": "Medium",
+            "execution_note": "Breakout confirmed; chase only in a tight breakout zone.",
+            "pt": pt,
+            "sl": sl,
         }
 
-    if action in ["Near Entry", "Ready"]:
-        base = ma20 if ma20 is not None and not pd.isna(ma20) else suggested_entry
-        zone_low = base - atr14 * 0.25
-        zone_high = base + atr14 * 0.15
-        if zone_low <= price <= zone_high:
-            fill_prob = "High"
-            note = "Price is near pullback zone. Limit buy is realistic today."
-        elif price < zone_low:
-            fill_prob = "Medium"
-            note = "Below zone. Wait for reclaim or intraday confirmation."
-        else:
-            fill_prob = "Low"
-            note = "Above ideal pullback zone. Better to wait than chase."
-        pt = base + atr14 * 2.0
-        sl = zone_low - atr14 * 0.8
+    if action in ["Near Entry", "Buy Setup"]:
+        base = suggested_entry
+        if base is None or pd.isna(base):
+            if ma20 is not None and not pd.isna(ma20):
+                base = ma20
+            else:
+                base = price
+
+        entry_low = round(base - 0.25 * atr14, 2)
+        entry_high = round(base + 0.25 * atr14, 2)
+
+        fill_prob = "High" if abs(price - base) <= 0.3 * atr14 else "Medium"
+
         return {
-            "entry_type": "Limit Buy",
-            "entry_zone": f"{format_num(zone_low, 2)} - {format_num(zone_high, 2)}",
+            "entry_type": "Limit",
+            "entry_zone": f"{entry_low} to {entry_high}",
             "fill_probability_today": fill_prob,
-            "execution_note": note,
-            "pt": safe_round(pt),
-            "sl": safe_round(sl),
+            "execution_note": "Prefer entering on controlled pullback / support retest.",
+            "pt": pt,
+            "sl": sl,
+        }
+
+    if action == "Breakout Watch":
+        trigger = breakout_level if breakout_level is not None and not pd.isna(breakout_level) else price
+        watch_low = round(trigger * 0.995, 2)
+        watch_high = round(trigger * 1.003, 2)
+        return {
+            "entry_type": "Watch Trigger",
+            "entry_zone": f"{watch_low} to {watch_high}",
+            "fill_probability_today": "Low",
+            "execution_note": "Watch for decisive break with volume before entry.",
+            "pt": pt,
+            "sl": sl,
         }
 
     if action == "Hold":
         return {
-            "entry_type": "Hold / Manage Position",
-            "entry_zone": "-",
-            "fill_probability_today": "N/A",
-            "execution_note": "No fresh entry. Manage existing holding with trailing risk control.",
-            "pt": safe_round(price + atr14 * 1.8),
-            "sl": safe_round(price - atr14 * 1.2),
+            "entry_type": "Manage Only",
+            "entry_zone": None,
+            "fill_probability_today": "Low",
+            "execution_note": "Existing position only; manage risk, not a fresh entry.",
+            "pt": pt,
+            "sl": sl,
         }
 
     return {
         "entry_type": "Wait",
-        "entry_zone": format_num(suggested_entry, 2),
+        "entry_zone": None,
         "fill_probability_today": "Low",
-        "execution_note": "No high-quality executable entry now. Keep on watchlist.",
-        "pt": safe_round(price + atr14 * 1.5),
-        "sl": safe_round(price - atr14 * 1.0),
+        "execution_note": "No efficient entry now.",
+        "pt": pt,
+        "sl": sl,
     }
 
-
 def analyze_stock(ticker, stock_type="Watch", buy_price=None, shares=None):
-    raw = load_price_data(ticker)
-    if raw.empty:
-        return {"ticker": ticker, "stock_type": stock_type, "error": "No data"}
+    df = load_price_data(ticker, period="6mo", interval="1d")
+    if df is None or df.empty:
+        return {
+            "ticker": ticker,
+            "stock_type": stock_type,
+            "buy_price": buy_price,
+            "shares": shares,
+            "df": pd.DataFrame(),
+            "price": None,
+            "action": "Watch",
+            "confidence": "Low",
+            "score_raw": 0,
+            "score_max": RAW_SCORE_MAX,
+            "score_100": 0,
+            "score_band": "Low",
+            "suggested_entry": None,
+            "entry_type": "Wait",
+            "entry_zone": None,
+            "fill_probability_today": "Low",
+            "execution_note": "No data available.",
+            "pt": None,
+            "sl": None,
+            "short_reason": "No price data available.",
+            "full_reason": "Yahoo Finance returned no data for this ticker.",
+        }
 
-    df = add_indicators(raw)
-    row = df.iloc[-1]
+    df = add_indicators(df)
+    last = df.iloc[-1]
 
-    price = safe_round(row["Close"])
-    ma20 = safe_round(row["MA20"])
-    ma50 = safe_round(row["MA50"])
-    rsi14 = safe_round(row["RSI14"])
-    atr14 = safe_round(row["ATR14"])
-    vol_ratio = safe_round(row["VolumeRatio"])
-    support = safe_round(row["Support20"])
-    resistance = safe_round(row["Resistance20"])
+    price = safe_round(last.get("Close"))
+    ma20 = safe_round(last.get("MA20"))
+    ma50 = safe_round(last.get("MA50"))
+    rsi14 = safe_round(last.get("RSI14"))
+    atr14 = safe_round(last.get("ATR14"))
 
-    score = 0.0
-    reason_parts = []
+    recent_20 = df.tail(20)
+    resistance = safe_round(recent_20["High"].max()) if "High" in recent_20.columns else None
+    support = safe_round(recent_20["Low"].min()) if "Low" in recent_20.columns else None
 
-    if ma20 and price > ma20:
-        score += 3
-        reason_parts.append("Price above MA20")
-    else:
-        reason_parts.append("Price below or near MA20")
+    avg20_volume = df["Volume"].tail(20).mean() if "Volume" in df.columns else None
+    vol_ratio = None
+    if avg20_volume and avg20_volume > 0:
+        vol_ratio = round(float(last["Volume"]) / float(avg20_volume), 2)
 
-    if ma50 and price > ma50:
-        score += 2
-        reason_parts.append("Price above MA50")
-
-    if rsi14 is not None:
-        if 48 <= rsi14 <= 62:
-            score += 4
-            reason_parts.append("RSI in healthy entry range")
-        elif 62 < rsi14 <= 68:
-            score += 2
-            reason_parts.append("RSI strong but still acceptable")
-        elif 68 < rsi14 <= 74:
-            score += 0.5
-            reason_parts.append("RSI getting extended")
-        elif rsi14 > 74:
-            score -= 3
-            reason_parts.append("RSI overheated")
-        elif rsi14 < 40:
-            score -= 1
-            reason_parts.append("RSI weak")
-
-    if vol_ratio is not None:
-        if vol_ratio >= 1.8:
-            score += 4
-            reason_parts.append("Strong volume expansion")
-        elif vol_ratio >= 1.2:
-            score += 2.5
-            reason_parts.append("Volume above average")
-        else:
-            reason_parts.append("Volume not yet convincing")
-
-    breakout_level = resistance
-    near_breakout = (
-        breakout_level is not None and
-        price is not None and
-        breakout_level > 0 and
-        price < breakout_level and
-        price >= breakout_level * 0.985
+    trend_ok = (
+        price is not None and ma20 is not None and ma50 is not None
+        and price >= ma20 and ma20 >= ma50
     )
+
     breakout_confirmed = (
-        breakout_level is not None and
-        price is not None and
-        breakout_level > 0 and
-        price >= breakout_level * 1.001 and
-        price <= breakout_level * 1.02 and
-        vol_ratio is not None and
-        vol_ratio >= 1.2
-    )
-    too_extended = (
-        breakout_level is not None and
-        price is not None and
-        breakout_level > 0 and
-        price > breakout_level * 1.02
-    )
-    pullback_ready = (
-        ma20 is not None and
-        ma20 > 0 and
-        abs(price - ma20) / ma20 <= 0.02 and
-        rsi14 is not None and
-        rsi14 <= 62
+        resistance is not None and price is not None
+        and vol_ratio is not None
+        and price > resistance * 1.002
+        and vol_ratio >= 1.2
     )
 
-    if near_breakout:
-        score += 2
-        reason_parts.append("Near breakout trigger")
+    breakout_watch = (
+        resistance is not None and price is not None
+        and vol_ratio is not None
+        and price >= resistance * 0.99
+        and price <= resistance * 1.002
+        and vol_ratio >= 0.9
+    )
+
+    near_entry_condition = (
+        ma20 is not None and atr14 is not None and atr14 > 0
+        and price is not None
+        and abs(price - ma20) <= 0.75 * atr14
+        and rsi14 is not None and rsi14 < 72
+        and ma50 is not None
+        and price >= ma20 and ma20 >= ma50
+    )
+
+    overheated = (rsi14 is not None and rsi14 >= 75)
+
+    raw_score = 0.0
+
+    if trend_ok:
+        raw_score += 5.0
+    if rsi14 is not None and 50 <= rsi14 <= 68:
+        raw_score += 3.0
+    elif rsi14 is not None and rsi14 < 75:
+        raw_score += 1.5
+
+    if vol_ratio is not None and vol_ratio >= 1.2:
+        raw_score += 3.0
+    elif vol_ratio is not None and vol_ratio >= 1.0:
+        raw_score += 1.5
+
     if breakout_confirmed:
-        score += 4
-        reason_parts.append("Breakout confirmed with volume")
-    if support is not None and price is not None and price > support:
-        score += 1
-        reason_parts.append("Holding above recent support")
-    if too_extended:
-        score -= 2
-        reason_parts.append("Too far above breakout level")
+        raw_score += 5.0
+    elif breakout_watch:
+        raw_score += 3.0
+    elif near_entry_condition:
+        raw_score += 3.0
 
-    score = max(0, min(score, RAW_SCORE_MAX))
-    score_100 = normalize_score_100(score)
+    if overheated:
+        raw_score -= 2.0
+
+    raw_score = max(0.0, min(raw_score, RAW_SCORE_MAX))
+    score_100 = normalize_score_100(raw_score, RAW_SCORE_MAX)
     score_band = get_score_band(score_100)
 
-    unrealized_pct = None
-    if stock_type == "Holding" and buy_price is not None and not pd.isna(buy_price) and buy_price > 0:
-        unrealized_pct = safe_round(((price - buy_price) / buy_price) * 100, 2)
-
-    if stock_type == "Holding":
-        if ma20 is not None and price < ma20 and rsi14 is not None and rsi14 < 45:
-            action = "Watch"
-            confidence = "Medium"
-            short_reason = "Holding is weakening below MA20; monitor closely."
-        elif rsi14 is not None and rsi14 > 75:
-            action = "Hold"
-            confidence = "Medium"
-            short_reason = "Extended but trend still intact; manage risk."
-        elif ma20 is not None and price >= ma20:
-            action = "Hold"
-            confidence = "High"
-            short_reason = "Trend intact above MA20."
-        else:
-            action = "Watch"
-            confidence = "Medium"
-            short_reason = "Holding needs monitoring."
-    else:
-        if breakout_confirmed:
-            action = "Breakout Confirmed"
-            confidence = "High"
-            short_reason = "Confirmed breakout with usable chase zone."
-        elif near_breakout and vol_ratio is not None and vol_ratio >= 1.1:
-            action = "Breakout Watch"
-            confidence = "High"
-            short_reason = "Very near breakout trigger with improving volume."
-        elif pullback_ready:
-            action = "Near Entry"
-            confidence = "High"
-            short_reason = "Pullback near MA20 with controlled RSI."
-        elif ma20 is not None and price < ma20 and rsi14 is not None and 40 <= rsi14 <= 52:
-            action = "Ready"
-            confidence = "Medium"
-            short_reason = "Setup is not active yet but may improve soon."
-        elif too_extended or (rsi14 is not None and rsi14 > 74):
-            action = "Avoid"
-            confidence = "High"
-            short_reason = "Breakout already too extended or overheated."
-        else:
-            action = "Watch"
-            confidence = "Medium"
-            short_reason = "No strong executable setup today."
-
-    if action == "Breakout Confirmed":
+    if breakout_confirmed:
+        action = "Breakout Confirmed"
+        confidence = "High"
         suggested_entry = price
-    elif action == "Breakout Watch":
-        suggested_entry = breakout_level * 1.002 if breakout_level else price
-    elif action in ["Near Entry", "Ready"]:
-        suggested_entry = ma20 if ma20 else price
+        short_reason = "Price cleared resistance with confirming volume."
+        full_reason = (
+            f"{ticker} broke above recent resistance near {resistance} with volume ratio {vol_ratio}. "
+            f"Trend is constructive above MA20/MA50, so this is treated as a breakout continuation setup."
+        )
+    elif near_entry_condition:
+        action = "Near Entry"
+        confidence = "High" if score_100 is not None and score_100 >= 65 else "Medium"
+        suggested_entry = ma20 if ma20 is not None else price
+        short_reason = "Trend intact and price is near pullback entry zone."
+        full_reason = (
+            f"{ticker} remains above MA20 ({ma20}) and MA50 ({ma50}), while price is close to MA20 within ATR tolerance. "
+            f"RSI at {rsi14} suggests the stock is not yet overheated, so this looks like a controlled pullback entry."
+        )
+    elif trend_ok and not overheated:
+        action = "Buy Setup"
+        confidence = "Medium"
+        suggested_entry = ma20 if ma20 is not None else price
+        short_reason = "Trend is healthy, but ideal trigger is not fully formed yet."
+        full_reason = (
+            f"{ticker} still has a healthy uptrend structure with price {price}, MA20 {ma20}, and MA50 {ma50}. "
+            f"It is not yet a confirmed breakout, but the setup is constructive enough to prepare a limit-style entry plan."
+        )
+    elif breakout_watch:
+        action = "Breakout Watch"
+        confidence = "Medium"
+        suggested_entry = resistance
+        short_reason = "Price is testing resistance; wait for breakout confirmation."
+        full_reason = (
+            f"{ticker} is sitting close to resistance around {resistance}. "
+            f"Volume ratio at {vol_ratio} is not weak, but a cleaner breakout confirmation is still preferred."
+        )
+    elif stock_type == "Holding" and trend_ok:
+        action = "Hold"
+        confidence = "Medium"
+        suggested_entry = None
+        short_reason = "Trend still intact; manage position rather than add now."
+        full_reason = (
+            f"{ticker} is already classified as a holding and trend structure remains constructive. "
+            f"This is better treated as position management instead of a fresh entry."
+        )
+    elif overheated:
+        action = "Avoid"
+        confidence = "High"
+        suggested_entry = None
+        short_reason = "Breakout already too extended or overheated."
+        full_reason = (
+            f"{ticker} looks extended relative to its trend, with RSI around {rsi14}. "
+            f"Risk/reward for a fresh entry is poor unless price resets or consolidates."
+        )
     else:
-        suggested_entry = price
-
-    suggested_entry = safe_round(suggested_entry)
+        action = "Watch"
+        confidence = "Medium" if score_100 is not None and score_100 >= 35 else "Low"
+        suggested_entry = None
+        short_reason = "No strong executable setup today."
+        full_reason = (
+            f"{ticker} does not currently meet breakout or pullback entry conditions. "
+            f"It stays on watch until trend, support, or resistance interaction improves."
+        )
 
     execution = optimize_entry_execution(
+        action=action,
         price=price,
         suggested_entry=suggested_entry,
-        action=action,
-        breakout_level=breakout_level,
+        breakout_level=resistance,
         ma20=ma20,
-        atr14=atr14,
-    )
-
-    full_reason = (
-        f"{'; '.join(reason_parts)}. "
-        f"Action is determined by trend, RSI, volume, breakout status, and whether today's entry is realistically executable."
+        atr14=atr14
     )
 
     return {
@@ -712,20 +714,11 @@ def analyze_stock(ticker, stock_type="Watch", buy_price=None, shares=None):
         "stock_type": stock_type,
         "buy_price": buy_price,
         "shares": shares,
-        "unrealized_pct": unrealized_pct,
         "df": df,
         "price": price,
-        "ma20": ma20,
-        "ma50": ma50,
-        "rsi14": rsi14,
-        "atr14": atr14,
-        "vol_ratio": vol_ratio,
-        "support": support,
-        "resistance": resistance,
-        "breakout_level": breakout_level,
         "action": action,
         "confidence": confidence,
-        "score_raw": score,
+        "score_raw": round(raw_score, 1),
         "score_max": RAW_SCORE_MAX,
         "score_100": score_100,
         "score_band": score_band,
@@ -738,14 +731,49 @@ def analyze_stock(ticker, stock_type="Watch", buy_price=None, shares=None):
         "sl": execution["sl"],
         "short_reason": short_reason,
         "full_reason": full_reason,
-        "updated_at": format_et_dt(),
+        "ma20": ma20,
+        "ma50": ma50,
+        "rsi14": rsi14,
+        "atr14": atr14,
+        "support": support,
+        "resistance": resistance,
+        "vol_ratio": vol_ratio,
     }
 
 def render_html_table(df, column_types=None, title=None):
     column_types = column_types or {}
     if df is None or df.empty:
-        st.info("No data to display.")
-        return
+        return {
+        "ticker": ticker,
+        "stock_type": stock_type,
+        "buy_price": buy_price,
+        "shares": shares,
+        "df": df,
+        "price": price,
+        "action": action,
+        "confidence": confidence,
+        "score_raw": round(raw_score, 1),
+        "score_max": RAW_SCORE_MAX,
+        "score_100": score_100,
+        "score_band": score_band,
+        "suggested_entry": suggested_entry,
+        "entry_type": execution["entry_type"],
+        "entry_zone": execution["entry_zone"],
+        "fill_probability_today": execution["fill_probability_today"],
+        "execution_note": execution["execution_note"],
+        "pt": execution["pt"],
+        "sl": execution["sl"],
+        "short_reason": short_reason,
+        "full_reason": full_reason,
+        "ma20": ma20,
+        "ma50": ma50,
+        "rsi14": rsi14,
+        "atr14": atr14,
+        "support": support,
+        "resistance": resistance,
+        "vol_ratio": vol_ratio,
+    }
+
 
     st.html(
         """
@@ -833,21 +861,31 @@ def results_to_dataframe(results):
                 "Ticker": r["ticker"],
                 "Type": r["stock_type"],
                 "Price": format_num(r["price"], 2),
-                "Action": render_badge(r["action"], color_action_badge(r["action"])),
+                "Action": render_badge(
+                    r["action"],
+                    color_action_badge(r["action"])
+                ),
                 "Recommendation Strength": render_badge(
                     r["confidence"],
                     color_confidence_badge(r["confidence"])
                 ),
-                "Entry": format_num(r["suggested_entry"], 2),
-                "Entry Type": r["entry_type"],
-                "Entry Zone": r["entry_zone"],
-                "Fill Prob": r["fill_probability_today"],
-                "PT": format_num(r["pt"], 2),
-                "SL": format_num(r["sl"], 2),
-                "Setup Score /100": format_num(r["score_100"], 1),
-                "Band": render_badge(r["score_band"], score_band_color(r["score_band"])),
-                "Reason": short_text(r["short_reason"], 95),
-                "_sort_score": r["score_100"] if r["score_100"] is not None else -1,
+                "Entry": (
+                    format_num(r.get("suggested_entry"), 2)
+                    if r.get("entry_type") not in ["Wait", "N/A", "Manage Only"]
+                    else "-"
+                ),
+                "Entry Type": r.get("entry_type", "-"),
+                "Entry Zone": r.get("entry_zone") if r.get("entry_zone") is not None else "-",
+                "Fill Prob": r.get("fill_probability_today", "-"),
+                "PT": format_num(r.get("pt"), 2),
+                "SL": format_num(r.get("sl"), 2),
+                "Setup Score /100": format_num(r.get("score_100"), 1),
+                "Band": render_badge(
+                    r.get("score_band", "N/A"),
+                    score_band_color(r.get("score_band", "N/A"))
+                ),
+                "Reason": short_text(r.get("short_reason", "-"), 95),
+                "_sort_score": r.get("score_100") if r.get("score_100") is not None else -1,
             }
         )
 
@@ -855,12 +893,7 @@ def results_to_dataframe(results):
     if not df.empty and "_sort_score" in df.columns:
         df = df.sort_values(by="_sort_score", ascending=False).drop(columns=["_sort_score"])
     return df
-
-    df = pd.DataFrame(rows)
-    if not df.empty and "_sort_score" in df.columns:
-        df = df.sort_values(by="_sort_score", ascending=False).drop(columns=["_sort_score"])
-    return df
-
+    
 def is_positive_top_pick(r):
     positive_actions = ["Near Entry", "Breakout Watch", "Breakout Confirmed", "Ready"]
 
@@ -939,7 +972,7 @@ def render_dashboard(results):
                     "SL": "num-col",
                     "Setup Score /100": "num-col",
                     "Reason": "reason-col",
-                }
+                },
             )
 
     with tab2:
