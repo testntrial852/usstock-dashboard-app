@@ -314,7 +314,7 @@ def save_daily_pick(row, bucket_label, bucket_time_et):
             row.get("stock_type"),
             row.get("price"),
             row.get("action"),
-            row.get("confidence"),
+            row.get("Recommendation Strength"),
             row.get("score_raw"),
             row.get("score_max"),
             row.get("score_100"),
@@ -382,8 +382,8 @@ def get_live_top5_rows(bucket_label):
                 "Type": stock_type,
                 "Price": format_num(snap.get("price"), 2),
                 "Action": render_badge(str(snap.get("action", "-")), color_action_badge(str(snap.get("action", "-")))),
-                "Confidence": render_badge(str(snap.get("confidence", "-")), color_confidence_badge(str(snap.get("confidence", "-")))),
-                "Score/100": format_num(snap.get("score_100"), 1),
+                "Recommendation Strength": render_badge(str(snap.get("confidence", "-")), color_confidence_badge(str(snap.get("confidence", "-")))),
+                "Setup Score /100": format_num(snap.get("score_100"), 1),
                 "Band": render_badge(str(snap.get("score_band", "N/A")), score_band_color(str(snap.get("score_band", "N/A")))),
                 "Entry Type": snap.get("entry_type", "-"),
                 "Entry Zone": snap.get("entry_zone", "-"),
@@ -399,8 +399,8 @@ def get_live_top5_rows(bucket_label):
             "Type": live["stock_type"],
             "Price": format_num(live["price"], 2),
             "Action": render_badge(live["action"], color_action_badge(live["action"])),
-            "Confidence": render_badge(live["confidence"], color_confidence_badge(live["confidence"])),
-            "Score/100": format_num(live["score_100"], 1),
+            "Recommendation Strength": render_badge(live["confidence"], color_confidence_badge(live["Confidence"])),
+            "Setup Score/100": format_num(live["Setup Score/100"], 1),
             "Band": render_badge(live["score_band"], score_band_color(live["score_band"])),
             "Entry Type": live["entry_type"],
             "Entry Zone": live["entry_zone"],
@@ -834,19 +834,32 @@ def results_to_dataframe(results):
                 "Type": r["stock_type"],
                 "Price": format_num(r["price"], 2),
                 "Action": render_badge(r["action"], color_action_badge(r["action"])),
-                "Confidence": render_badge(r["confidence"], color_confidence_badge(r["confidence"])),
+                "Recommendation Strength": render_badge(
+                    r["confidence"],
+                    color_confidence_badge(r["confidence"])
+                ),
                 "Entry": format_num(r["suggested_entry"], 2),
                 "Entry Type": r["entry_type"],
                 "Entry Zone": r["entry_zone"],
                 "Fill Prob": r["fill_probability_today"],
                 "PT": format_num(r["pt"], 2),
                 "SL": format_num(r["sl"], 2),
-                "Score/100": format_num(r["score_100"], 1),
+                "Setup Score /100": format_num(r["score_100"], 1),
                 "Band": render_badge(r["score_band"], score_band_color(r["score_band"])),
                 "Reason": short_text(r["short_reason"], 95),
+                "_sort_score": r["score_100"] if r["score_100"] is not None else -1,
             }
         )
-    return pd.DataFrame(rows)
+
+    df = pd.DataFrame(rows)
+    if not df.empty and "_sort_score" in df.columns:
+        df = df.sort_values(by="_sort_score", ascending=False).drop(columns=["_sort_score"])
+    return df
+
+    df = pd.DataFrame(rows)
+    if not df.empty and "_sort_score" in df.columns:
+        df = df.sort_values(by="_sort_score", ascending=False).drop(columns=["_sort_score"])
+    return df
 
 def is_positive_top_pick(r):
     positive_actions = ["Near Entry", "Breakout Watch", "Breakout Confirmed", "Ready"]
@@ -854,10 +867,10 @@ def is_positive_top_pick(r):
     if r.get("action") not in positive_actions:
         return False
 
-    if r.get("action") == "Ready" and r.get("confidence") != "High":
+    if r.get("action") == "Ready" and r.get("Recommendation Strength") != "High":
         return False
 
-    if r.get("confidence") not in ["High", "Medium"]:
+    if r.get("Recommendation Strength") not in ["High", "Medium"]:
         return False
 
     if r.get("fill_probability_today") == "Low":
@@ -884,7 +897,7 @@ def save_top5_to_db(results):
         filtered,
         key=lambda x: (
             x["score_100"] if x["score_100"] is not None else 0,
-            1 if x["confidence"] == "High" else 0
+            1 if x["Recommendation Strength"] == "High" else 0
         ),
         reverse=True
     )
@@ -924,9 +937,9 @@ def render_dashboard(results):
                     "Entry": "num-col",
                     "PT": "num-col",
                     "SL": "num-col",
-                    "Score/100": "num-col",
+                    "Setup Score /100": "num-col",
                     "Reason": "reason-col",
-                },
+                }
             )
 
     with tab2:
@@ -941,7 +954,7 @@ def render_dashboard(results):
                     "Entry": "num-col",
                     "PT": "num-col",
                     "SL": "num-col",
-                    "Score/100": "num-col",
+                    "Setup Score /100": "num-col",
                     "Reason": "reason-col",
                 },
             )
@@ -976,7 +989,7 @@ def render_top5_section():
                 live_df,
                 column_types={
                     "Price": "num-col",
-                    "Score/100": "num-col",
+                    "Setup Score /100": "num-col",
                     "PT": "num-col",
                     "SL": "num-col",
                     "Reason": "reason-col",
@@ -995,8 +1008,8 @@ def render_detail_section(results):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Price", format_num(selected["price"], 2))
     c2.metric("Action", selected["action"])
-    c3.metric("Confidence", selected["confidence"])
-    c4.metric("Score/100", format_num(selected["score_100"], 1))
+    c3.metric("Recommendation Strength", selected["confidence"])
+    c4.metric("Setup Score /100", format_num(selected["score_100"], 1))
 
     c5, c6, c7, c8 = st.columns(4)
     c5.metric("MA20", format_num(selected["ma20"], 2))
@@ -1030,11 +1043,11 @@ def render_detail_section(results):
         st.write(selected["full_reason"])
 
     with tab4:
-        st.markdown(f"**Raw Score:** {format_num(selected['score_raw'], 1)}")
-        st.markdown(f"**Max Score:** {format_num(selected['score_max'], 1)}")
-        st.markdown(f"**Score / 100:** {format_num(selected['score_100'], 1)}")
+        st.markdown(f"**Raw Setup Score:** {format_num(selected['score_raw'], 1)}")
+        st.markdown(f"**Max Setup Score:** {format_num(selected['score_max'], 1)}")
+        st.markdown(f"**Setup Score /100:** {format_num(selected['score_100'], 1)}")
         st.markdown(f"**Band:** {selected['score_band']}")
-        st.caption("Raw/Max is shown only in detail view for deeper interpretation of setup quality.")
+        st.caption("Setup Score measures overall setup quality. Recommendation Strength reflects how strong the current analyzed recommendation is.")
 
 
 def render_legends():
@@ -1069,7 +1082,14 @@ def render_legends():
 - **Low**: Weak setup; low priority.
         """
         )
-
+    with st.expander("How to Read Recommendation Strength and Setup Score"):
+        st.markdown(
+            """
+- **Recommendation Strength**: How strong the system believes the current recommendation is.
+- **Setup Score /100**: Overall quality of the current stock setup, used for comparison and ranking.
+- A stock can have a strong setup but still be **Avoid** if it is too extended to enter safely now.
+            """
+        )
 
 def render_manage_section():
     st.subheader("Manage Stocks")
