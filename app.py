@@ -165,6 +165,54 @@ def init_db():
     conn.commit()
     conn.close()
 
+def rebuild_daily_picks_if_needed():
+    conn = get_conn()
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(daily_picks)")
+    cols = [row[1] for row in c.fetchall()]
+
+    required = {
+        "pick_date", "bucket", "ticker", "price", "action", "confidence",
+        "score_raw", "score_max", "score_100", "score_band",
+        "suggested_entry", "entry_type", "entry_zone", "fill_probability_today",
+        "execution_note", "pt", "sl", "short_reason", "full_reason",
+        "change_vs_prev_bucket", "created_at"
+    }
+
+    if not required.issubset(set(cols)):
+        c.execute("DROP TABLE IF EXISTS daily_picks")
+        c.execute("""
+        CREATE TABLE daily_picks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pick_date TEXT,
+            bucket TEXT,
+            ticker TEXT,
+            price REAL,
+            action TEXT,
+            confidence TEXT,
+            score_raw REAL,
+            score_max REAL,
+            score_100 REAL,
+            score_band TEXT,
+            suggested_entry REAL,
+            entry_type TEXT,
+            entry_zone TEXT,
+            fill_probability_today TEXT,
+            execution_note TEXT,
+            pt REAL,
+            sl REAL,
+            short_reason TEXT,
+            full_reason TEXT,
+            change_vs_prev_bucket TEXT,
+            created_at TEXT
+        )
+        """)
+        conn.commit()
+
+    conn.close()
+
+
 
 def seed_default_stocks():
     conn = get_conn()
@@ -620,6 +668,7 @@ def render_legends():
 
 def main():
     init_db()
+    rebuild_daily_picks_if_needed()
     seed_default_stocks()
     results = build_analysis_results()
     st.title("US Stock WebApp")
