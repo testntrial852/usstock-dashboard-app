@@ -404,27 +404,45 @@ def get_daily_picks_for_bucket(pick_date, bucket_label):
 def replace_daily_picks_for_bucket(bucket_label, rows):
     conn = get_conn()
     c = conn.cursor()
+
     c.execute("DELETE FROM daily_picks WHERE pick_date = ? AND bucket = ?", (get_et_date_str(), bucket_label))
+
     for row in rows:
-        c.execute(
-            """
+        values = (
+            get_et_date_str(),
+            bucket_label,
+            row.get("ticker"),
+            row.get("price"),
+            row.get("action"),
+            row.get("confidence"),
+            row.get("score_raw"),
+            row.get("score_max"),
+            row.get("score_100"),
+            row.get("score_band"),
+            row.get("suggested_entry"),
+            row.get("entry_type"),
+            row.get("entry_zone"),
+            row.get("fill_probability_today"),
+            row.get("execution_note"),
+            row.get("pt"),
+            row.get("sl"),
+            row.get("short_reason"),
+            row.get("full_reason"),
+            row.get("change_vs_prev_bucket", "Refreshed"),
+            format_et_dt(),
+        )
+
+        c.execute("""
             INSERT INTO daily_picks (
                 pick_date, bucket, ticker, price, action, confidence,
                 score_raw, score_max, score_100, score_band,
                 suggested_entry, entry_type, entry_zone, fill_probability_today, execution_note,
                 pt, sl, short_reason, full_reason, change_vs_prev_bucket, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                get_et_date_str(), bucket_label, row.get("ticker"), row.get("price"), row.get("action"), row.get("confidence"),
-                row.get("score_raw"), row.get("score_max"), row.get("score_100"), row.get("score_band"),
-                row.get("suggested_entry"), row.get("entry_type"), row.get("entry_zone"), row.get("fill_probability_today"), row.get("execution_note"),
-                row.get("pt"), row.get("sl"), row.get("short_reason"), row.get("full_reason"), row.get("change_vs_prev_bucket", "Refreshed"), format_et_dt(),
-            ),
-        )
+        """, values)
+
     conn.commit()
     conn.close()
-
 
 def refresh_active_bucket(force=False):
     bucket_label = get_current_bucket_label()
