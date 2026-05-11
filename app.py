@@ -25,10 +25,41 @@ DEFAULT_STOCKS = [
     {"ticker": "MU", "stock_type": "Watch", "buy_price": None, "shares": None},
     {"ticker": "VRT", "stock_type": "Watch", "buy_price": None, "shares": None},
 ]
-TOP5_UNIVERSE = [
-    "NVDA", "AMD", "MU", "VRT", "TSLA", "GOOG", "META", "AMZN", "AVGO", "ANET",
-    "CRWD", "PANW", "SNOW", "PLTR", "RKLB", "SMCI", "ARM", "TSM", "MRVL", "DELL"
+
+# ===== UPDATED UNIVERSE: M7 + AI infra/semis + cloud + defense + energy + metals =====
+M7_UNIVERSE = [
+    "AAPL", "MSFT", "GOOG", "AMZN", "META", "NVDA", "TSLA"
 ]
+
+AI_INFRA_SEMIS_UNIVERSE = [
+    "AMD", "MU", "AVGO", "ANET", "VRT", "SMCI", "ARM", "TSM", "MRVL", "DELL"
+]
+
+CLOUD_UNIVERSE = [
+    "SNOW", "CRWD", "PANW", "PLTR", "NET", "DDOG"
+]
+
+DEFENSE_UNIVERSE = [
+    "LMT", "RTX", "NOC", "GD"
+]
+
+ENERGY_UNIVERSE = [
+    "XOM", "CVX", "SLB", "FSLR"
+]
+
+METALS_UNIVERSE = [
+    "FCX", "NEM", "AA", "CLF"
+]
+
+TOP5_UNIVERSE = list(dict.fromkeys(
+    M7_UNIVERSE
+    + AI_INFRA_SEMIS_UNIVERSE
+    + CLOUD_UNIVERSE
+    + DEFENSE_UNIVERSE
+    + ENERGY_UNIVERSE
+    + METALS_UNIVERSE
+))
+# ===== END UNIVERSE UPDATE =====
 
 
 def now_et():
@@ -293,18 +324,63 @@ def optimize_entry_execution(action, price, suggested_entry, breakout_level, ma2
         atr14 = max(price * 0.02, 1.0)
     pt = round(price + 2.2 * atr14, 2)
     sl = round(price - 1.4 * atr14, 2)
+    
+    # ===== UPDATED: Entry zone instead of single point =====
     if action == "Breakout Confirmed":
         trigger = breakout_level if breakout_level is not None and not pd.isna(breakout_level) else price
-        return {"entry_type": "Buy Stop / Stop-Limit", "entry_zone": f"{round(trigger * 1.001, 2)} to {round(trigger * 1.008, 2)}", "fill_probability_today": "Medium", "execution_note": "Breakout confirmed; chase only in a tight breakout zone.", "pt": pt, "sl": sl}
+        zone_low = round(trigger * 1.001, 2)
+        zone_high = round(trigger * 1.008, 2)
+        return {
+            "entry_type": "Buy Stop / Stop-Limit",
+            "entry_zone": f"{zone_low} to {zone_high}",
+            "fill_probability_today": "Medium",
+            "execution_note": "Breakout confirmed; chase only in a tight breakout zone.",
+            "pt": pt,
+            "sl": sl
+        }
     if action in ["Near Entry", "Buy Setup"]:
         base = suggested_entry if suggested_entry is not None and not pd.isna(suggested_entry) else (ma20 if ma20 is not None and not pd.isna(ma20) else price)
-        return {"entry_type": "Limit", "entry_zone": f"{round(base - 0.25 * atr14, 2)} to {round(base + 0.25 * atr14, 2)}", "fill_probability_today": "High" if abs(price - base) <= 0.3 * atr14 else "Medium", "execution_note": "Prefer entering on controlled pullback / support retest.", "pt": pt, "sl": sl}
+        zone_low = round(base - 0.25 * atr14, 2)
+        zone_high = round(base + 0.25 * atr14, 2)
+        distance_pct = abs(price - base) / base * 100 if base > 0 else 999
+        fill_prob = "High" if distance_pct <= 2.5 else ("Medium" if distance_pct <= 5 else "Low")
+        return {
+            "entry_type": "Limit",
+            "entry_zone": f"{zone_low} to {zone_high}",
+            "fill_probability_today": fill_prob,
+            "execution_note": "Prefer entering on controlled pullback / support retest.",
+            "pt": pt,
+            "sl": sl
+        }
     if action == "Breakout Watch":
         trigger = breakout_level if breakout_level is not None and not pd.isna(breakout_level) else price
-        return {"entry_type": "Watch Trigger", "entry_zone": f"{round(trigger * 0.995, 2)} to {round(trigger * 1.003, 2)}", "fill_probability_today": "Low", "execution_note": "Watch for decisive break with volume before entry.", "pt": pt, "sl": sl}
+        zone_low = round(trigger * 0.995, 2)
+        zone_high = round(trigger * 1.003, 2)
+        return {
+            "entry_type": "Watch Trigger",
+            "entry_zone": f"{zone_low} to {zone_high}",
+            "fill_probability_today": "Low",
+            "execution_note": "Watch for decisive break with volume before entry.",
+            "pt": pt,
+            "sl": sl
+        }
     if action == "Hold":
-        return {"entry_type": "Manage Only", "entry_zone": None, "fill_probability_today": "Low", "execution_note": "Existing position only; manage risk, not a fresh entry.", "pt": pt, "sl": sl}
-    return {"entry_type": "Wait", "entry_zone": None, "fill_probability_today": "Low", "execution_note": "No efficient entry now.", "pt": pt, "sl": sl}
+        return {
+            "entry_type": "Manage Only",
+            "entry_zone": None,
+            "fill_probability_today": "Low",
+            "execution_note": "Existing position only; manage risk, not a fresh entry.",
+            "pt": pt,
+            "sl": sl
+        }
+    return {
+        "entry_type": "Wait",
+        "entry_zone": None,
+        "fill_probability_today": "Low",
+        "execution_note": "No efficient entry now.",
+        "pt": pt,
+        "sl": sl
+    }
 
 
 def analyze_stock(ticker, stock_type="Watch", buy_price=None, shares=None):
@@ -492,6 +568,7 @@ def replace_daily_picks_for_bucket(bucket_label, rows):
     conn.commit()
     conn.close()
 
+# ===== UPDATED: Top 5 now filters by entry quality and ranks by executability =====
 def refresh_active_bucket(force=False):
     bucket_label = get_current_bucket_label()
     if bucket_label is None:
@@ -505,11 +582,38 @@ def refresh_active_bucket(force=False):
         except Exception:
             continue
 
-    results = [r for r in results if r.get("score_100") is not None]
-    results.sort(key=lambda x: (x.get("score_100", -1), x.get("score_raw", -1)), reverse=True)
+    # Filter: only keep stocks with actionable setups
+    results = [r for r in results if r.get("action") not in ["Avoid", "Watch", None] and r.get("score_100") is not None]
+    
+    # Calculate entry quality bonus
+    for r in results:
+        entry_bonus = 0.0
+        fill_prob = r.get("fill_probability_today", "Low")
+        
+        # Higher bonus for better fill probability
+        if fill_prob == "High":
+            entry_bonus = 15.0
+        elif fill_prob == "Medium":
+            entry_bonus = 8.0
+        elif fill_prob == "Low":
+            entry_bonus = 2.0
+        
+        # Additional bonus for clearer entry zones
+        if r.get("entry_zone") and r.get("entry_zone") != "-":
+            entry_bonus += 3.0
+        
+        # Combine base score with entry quality
+        r["final_score"] = r.get("score_100", 0) + entry_bonus
+    
+    # Sort by final score (potential + executability)
+    results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+    
+    # Take top 5 with best executability
     top5 = results[:5]
+    
     replace_daily_picks_for_bucket(bucket_label, top5)
     return bucket_label
+# ===== END Top 5 UPDATE =====
 
 
 def render_stock_chart(result):
@@ -578,6 +682,8 @@ def render_top5_section():
     st.subheader("Daily Top 5 High Potential Picks")
     active_bucket = refresh_active_bucket(force=True)
     st.caption(f"Active ET window bucket: {active_bucket or 'Before 04:00 ET'}")
+    st.caption(f"Universe: {len(TOP5_UNIVERSE)} stocks across M7, AI infra/semis, cloud, defense, energy, and metals sectors")
+    
     with st.expander("Top 5 debug"):
         st.caption(f"ET now: {format_et_dt()} | Active bucket: {active_bucket or 'Before 04:00 ET'} | Date: {get_et_date_str()}")
         
@@ -664,6 +770,7 @@ def render_manage_section():
 
 def render_legends():
     st.caption("Top 5 buckets now work as ET time windows: 04:00–07:59, 08:00–10:29, and 10:30 onward. Refreshing the page updates the active bucket with the latest available data in that window.")
+    st.caption("Top 5 ranking now prioritizes stocks with higher fill probability and clearer entry zones, combining fundamental potential with execution quality.")
 
 
 def main():
